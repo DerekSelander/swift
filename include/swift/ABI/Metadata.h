@@ -17,6 +17,11 @@
 #ifndef SWIFT_ABI_METADATA_H
 #define SWIFT_ABI_METADATA_H
 
+#ifdef OBJC2_UNAVAILABLE
+#undef OBJC2_UNAVAILABLE
+#define OBJC2_UNAVAILABLE
+#endif
+
 #include <atomic>
 #include <cassert>
 #include <climits>
@@ -697,10 +702,13 @@ public:
   /// Get the ObjC class object for this type if it has one, or return null if
   /// the type is not a class (or not a class with a class object).
   /// This is allowed for InProcess values only.
+    
+
+    
   template <typename R = Runtime>
-  typename std::enable_if<std::is_same<R, InProcess>::value, Class>::type
+  typename std::enable_if<std::is_same<R, InProcess>::value, objc_class*>::type
   getObjCClassObject() const {
-    return reinterpret_cast<void*>(
+    return reinterpret_cast<objc_class*>(
       const_cast<TargetClassMetadata<InProcess>*>(
         getClassObject()));
   }
