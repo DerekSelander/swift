@@ -27,6 +27,11 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+// Shuts up the compiler...
+namespace llvm {
+    int EnableABIBreakingChecks = 0;
+}
+
 namespace swift {
 
 enum {

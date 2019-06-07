@@ -69,11 +69,11 @@ public:
 };
 
 class FieldRecord {
+public:
   const FieldRecordFlags Flags;
   const RelativeDirectPointer<const char> MangledTypeName;
   const RelativeDirectPointer<const char> FieldName;
 
-public:
   FieldRecord() = delete;
 
   bool hasMangledTypeName() const {

@@ -700,7 +700,7 @@ public:
   template <typename R = Runtime>
   typename std::enable_if<std::is_same<R, InProcess>::value, Class>::type
   getObjCClassObject() const {
-    return reinterpret_cast<Class>(
+    return reinterpret_cast<void*>(
       const_cast<TargetClassMetadata<InProcess>*>(
         getClassObject()));
   }
