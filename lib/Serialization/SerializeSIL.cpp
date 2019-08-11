@@ -415,8 +415,9 @@ void SILSerializer::writeSILFunction(const SILFunction &F, bool DeclOnly) {
       (unsigned)F.isGlobalInit(), (unsigned)F.getInlineStrategy(),
       (unsigned)F.getOptimizationMode(), (unsigned)F.getEffectsKind(),
       (unsigned)numSpecAttrs, (unsigned)F.hasOwnership(),
-      F.isWeakLinked(), (unsigned)F.isDynamicallyReplaceable(), FnID,
-      replacedFunctionID, genericEnvID, clangNodeOwnerID, SemanticsIDs);
+      F.isWeakLinked(), (unsigned)F.isDynamicallyReplaceable(),
+      (unsigned)F.isExactSelfClass(),
+      FnID, replacedFunctionID, genericEnvID, clangNodeOwnerID, SemanticsIDs);
 
   if (NoBody)
     return;
@@ -1230,7 +1231,6 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
   NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, "...") \
   ALWAYS_LOADABLE_CHECKED_REF_STORAGE(Name, "...")
 #include "swift/AST/ReferenceStorage.def"
-  case SILInstructionKind::CondFailInst:
   case SILInstructionKind::RetainValueInst:
   case SILInstructionKind::DestructureStructInst:
   case SILInstructionKind::DestructureTupleInst:
@@ -1397,6 +1397,18 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
         S.addTypeRef(TAI->getIndex()->getType().getASTType()),
         addValueRef(TAI->getIndex()),
         S.addTypeRef(TAI->getTailType().getASTType()));
+    break;
+  }
+  case SILInstructionKind::CondFailInst: {
+    auto *CFI = cast<CondFailInst>(&SI);
+    SILValue operand = CFI->getOperand();
+    SILTwoOperandsLayout::emitRecord(Out, ScratchRecord,
+        SILAbbrCodes[SILTwoOperandsLayout::Code],
+        (unsigned)SI.getKind(), /*attributes*/ 0,
+        S.addTypeRef(operand->getType().getASTType()),
+        (unsigned)operand->getType().getCategory(),
+        addValueRef(operand),
+        0, 0, S.addUniquedStringRef(CFI->getMessage()));
     break;
   }
   case SILInstructionKind::StringLiteralInst: {
@@ -2245,7 +2257,6 @@ void SILSerializer::writeSILVTable(const SILVTable &vt) {
         // SILFunction name
         S.addUniquedStringRef(entry.Implementation->getName()),
         toStableVTableEntryKind(entry.TheKind),
-        toStableSILLinkage(entry.Linkage),
         ListOfValues);
   }
 }

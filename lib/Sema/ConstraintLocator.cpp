@@ -52,6 +52,7 @@ void ConstraintLocator::Profile(llvm::FoldingSetNodeID &id, Expr *anchor,
     case ApplyArgument:
     case ApplyFunction:
     case FunctionArgument:
+    case DefaultArgument:
     case FunctionResult:
     case OptionalPayload:
     case Member:
@@ -63,6 +64,7 @@ void ConstraintLocator::Profile(llvm::FoldingSetNodeID &id, Expr *anchor,
     case RValueAdjustment:
     case ClosureResult:
     case ParentType:
+    case ExistentialSuperclassType:
     case InstanceType:
     case SequenceElementType:
     case AutoclosureResult:
@@ -82,7 +84,6 @@ void ConstraintLocator::Profile(llvm::FoldingSetNodeID &id, Expr *anchor,
     case KeyPathRoot:
     case KeyPathValue:
     case KeyPathComponentResult:
-    case SingleExprFuncResultType:
       if (unsigned numValues = numNumericValuesInPathElement(elt.getKind())) {
         id.AddInteger(elt.getValue());
         if (numValues > 1)
@@ -169,22 +170,22 @@ bool ConstraintLocator::isForKeyPathComponent() const {
   });
 }
 
-static bool isLastElement(const ConstraintLocator *locator,
-                          ConstraintLocator::PathElementKind expectedKind) {
-  auto path = locator->getPath();
+bool ConstraintLocator::isLastElement(
+    ConstraintLocator::PathElementKind expectedKind) const {
+  auto path = getPath();
   return !path.empty() && path.back().getKind() == expectedKind;
 }
 
 bool ConstraintLocator::isForGenericParameter() const {
-  return isLastElement(this, ConstraintLocator::GenericParameter);
+  return isLastElement(ConstraintLocator::GenericParameter);
 }
 
 bool ConstraintLocator::isForSequenceElementType() const {
-  return isLastElement(this, ConstraintLocator::SequenceElementType);
+  return isLastElement(ConstraintLocator::SequenceElementType);
 }
 
 bool ConstraintLocator::isForContextualType() const {
-  return isLastElement(this, ConstraintLocator::ContextualType);
+  return isLastElement(ConstraintLocator::ContextualType);
 }
 
 GenericTypeParamType *ConstraintLocator::getGenericParameter() const {
@@ -270,6 +271,10 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) {
       out << "function argument";
       break;
 
+    case DefaultArgument:
+      out << "default argument";
+      break;
+
     case FunctionResult:
       out << "function result";
       break;
@@ -308,6 +313,10 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) {
         
     case ParentType:
       out << "parent type";
+      break;
+
+    case ExistentialSuperclassType:
+      out << "existential superclass type";
       break;
 
     case LValueConversion:
@@ -364,7 +373,10 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) {
       break;
 
     case ContextualType:
-      out << "contextual type";
+      if (elt.isResultOfSingleExprFunction())
+        out << "expected result type of the function with a single expression";
+      else
+        out << "contextual type";
       break;
 
     case SynthesizedArgument:
@@ -389,9 +401,6 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) {
 
     case KeyPathComponentResult:
       out << "key path component result";
-      break;
-    case SingleExprFuncResultType:
-      out << " expected result type of the function with a single expression";
       break;
     }
   }

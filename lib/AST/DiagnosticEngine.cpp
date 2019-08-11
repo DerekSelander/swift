@@ -99,6 +99,15 @@ static constexpr const char * const diagnosticStrings[] = {
     "<not a diagnostic>",
 };
 
+static constexpr const char *const debugDiagnosticStrings[] = {
+#define ERROR(ID, Options, Text, Signature) Text " [" #ID "]",
+#define WARNING(ID, Options, Text, Signature) Text " [" #ID "]",
+#define NOTE(ID, Options, Text, Signature) Text " [" #ID "]",
+#define REMARK(ID, Options, Text, Signature) Text " [" #ID "]",
+#include "swift/AST/DiagnosticsAll.def"
+    "<not a diagnostic>",
+};
+
 DiagnosticState::DiagnosticState() {
   // Initialize our per-diagnostic state to default
   perDiagnosticBehavior.resize(LocalDiagID::NumDiags, Behavior::Unspecified);
@@ -385,6 +394,23 @@ static bool shouldShowAKA(Type type, StringRef typeName) {
   return true;
 }
 
+/// If a type is part of an argument list which includes another, distinct type
+/// with the same string representation, it should be qualified during
+/// formatting.
+static bool typeSpellingIsAmbiguous(Type type,
+                                    ArrayRef<DiagnosticArgument> Args) {
+  for (auto arg : Args) {
+    if (arg.getKind() == DiagnosticArgumentKind::Type) {
+      auto argType = arg.getAsType();
+      if (argType && !argType->isEqual(type) &&
+          argType->getWithoutParens().getString() == type.getString()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /// Format a single diagnostic argument and write it to the given
 /// stream.
 static void formatDiagnosticArgument(StringRef Modifier, 
@@ -451,17 +477,50 @@ static void formatDiagnosticArgument(StringRef Modifier,
     
     // Strip extraneous parentheses; they add no value.
     auto type = Arg.getAsType()->getWithoutParens();
-    std::string typeName = type->getString();
 
-    if (shouldShowAKA(type, typeName)) {
-      llvm::SmallString<256> AkaText;
-      llvm::raw_svector_ostream OutAka(AkaText);
-      OutAka << type->getCanonicalType();
-      Out << llvm::format(FormatOpts.AKAFormatString.c_str(), typeName.c_str(),
-                          AkaText.c_str());
+    // If a type has an unresolved type, print it with syntax sugar removed for
+    // clarity. For example, print `Array<_>` instead of `[_]`.
+    if (type->hasUnresolvedType()) {
+      type = type->getWithoutSyntaxSugar();
+    }
+
+    bool isAmbiguous = typeSpellingIsAmbiguous(type, Args);
+
+    if (isAmbiguous && isa<OpaqueTypeArchetypeType>(type.getPointer())) {
+      auto opaqueTypeDecl = type->castTo<OpaqueTypeArchetypeType>()->getDecl();
+
+      llvm::SmallString<256> NamingDeclText;
+      llvm::raw_svector_ostream OutNaming(NamingDeclText);
+      auto namingDecl = opaqueTypeDecl->getNamingDecl();
+      if (namingDecl->getDeclContext()->isTypeContext()) {
+        auto selfTy = namingDecl->getDeclContext()->getSelfInterfaceType();
+        selfTy->print(OutNaming);
+        OutNaming << '.';
+      }
+      namingDecl->getFullName().printPretty(OutNaming);
+
+      auto descriptiveKind = opaqueTypeDecl->getDescriptiveKind();
+
+      Out << llvm::format(FormatOpts.OpaqueResultFormatString.c_str(),
+                          type->getString().c_str(),
+                          Decl::getDescriptiveKindName(descriptiveKind).data(),
+                          NamingDeclText.c_str());
+
     } else {
-      Out << FormatOpts.OpeningQuotationMark << typeName
-          << FormatOpts.ClosingQuotationMark;
+      auto printOptions = PrintOptions();
+      printOptions.FullyQualifiedTypes = isAmbiguous;
+      std::string typeName = type->getString(printOptions);
+
+      if (shouldShowAKA(type, typeName)) {
+        llvm::SmallString<256> AkaText;
+        llvm::raw_svector_ostream OutAka(AkaText);
+        OutAka << type->getCanonicalType();
+        Out << llvm::format(FormatOpts.AKAFormatString.c_str(),
+                            typeName.c_str(), AkaText.c_str());
+      } else {
+        Out << FormatOpts.OpeningQuotationMark << typeName
+            << FormatOpts.ClosingQuotationMark;
+      }
     }
     break;
   }
@@ -704,6 +763,7 @@ void DiagnosticEngine::flushActiveDiagnostic() {
   if (TransactionCount == 0) {
     emitDiagnostic(*ActiveDiagnostic);
   } else {
+    onTentativeDiagnosticFlush(*ActiveDiagnostic);
     TentativeDiagnostics.emplace_back(std::move(*ActiveDiagnostic));
   }
   ActiveDiagnostic.reset();
@@ -842,14 +902,18 @@ void DiagnosticEngine::emitDiagnostic(const Diagnostic &diagnostic) {
   Info.Ranges = diagnostic.getRanges();
   Info.FixIts = diagnostic.getFixIts();
   for (auto &Consumer : Consumers) {
-    Consumer->handleDiagnostic(SourceMgr, loc, toDiagnosticKind(behavior),
-                               diagnosticStringFor(Info.ID),
-                               diagnostic.getArgs(), Info,
-                               getDefaultDiagnosticLoc());
+    Consumer->handleDiagnostic(
+        SourceMgr, loc, toDiagnosticKind(behavior),
+        diagnosticStringFor(Info.ID, getPrintDiagnosticNames()),
+        diagnostic.getArgs(), Info, getDefaultDiagnosticLoc());
   }
 }
 
-const char *DiagnosticEngine::diagnosticStringFor(const DiagID id) {
+const char *DiagnosticEngine::diagnosticStringFor(const DiagID id,
+                                                  bool printDiagnosticName) {
+  if (printDiagnosticName) {
+    return debugDiagnosticStrings[(unsigned)id];
+  }
   return diagnosticStrings[(unsigned)id];
 }
 
@@ -889,4 +953,18 @@ BufferIndirectlyCausingDiagnosticRAII::BufferIndirectlyCausingDiagnosticRAII(
   auto loc = SF.getASTContext().SourceMgr.getLocForBufferStart(*id);
   if (loc.isValid())
     Diags.setBufferIndirectlyCausingDiagnosticToInput(loc);
+}
+
+void DiagnosticEngine::onTentativeDiagnosticFlush(Diagnostic &diagnostic) {
+  for (auto &argument : diagnostic.Args) {
+    if (argument.getKind() != DiagnosticArgumentKind::String)
+      continue;
+
+    auto content = argument.getAsString();
+    if (content.empty())
+      continue;
+
+    auto I = TransactionStrings.insert(std::make_pair(content, char())).first;
+    argument = DiagnosticArgument(StringRef(I->getKeyData()));
+  }
 }

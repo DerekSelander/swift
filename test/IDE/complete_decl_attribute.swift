@@ -9,7 +9,13 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_INIT | %FileCheck %s -check-prefix=ON_INIT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_PROPERTY | %FileCheck %s -check-prefix=ON_PROPERTY
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_METHOD | %FileCheck %s -check-prefix=ON_METHOD
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_PARAM_1 | %FileCheck %s -check-prefix=ON_PARAM
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_PARAM_2 | %FileCheck %s -check-prefix=ON_PARAM
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_MEMBER_INDEPENDENT_1 | %FileCheck %s -check-prefix=ON_MEMBER_LAST
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_MEMBER_INDEPENDENT_2 | %FileCheck %s -check-prefix=ON_MEMBER_LAST
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ON_MEMBER_LAST | %FileCheck %s -check-prefix=ON_MEMBER_LAST
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=KEYWORD_INDEPENDENT_1 | %FileCheck %s -check-prefix=KEYWORD_LAST
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=KEYWORD_INDEPENDENT_2 | %FileCheck %s -check-prefix=KEYWORD_LAST
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=KEYWORD_LAST | %FileCheck %s -check-prefix=KEYWORD_LAST
 
 struct MyStruct {}
@@ -43,8 +49,7 @@ struct MyStruct {}
 // AVAILABILITY2-NEXT:        Keyword/None:                       deprecated: [#Specify version number#]; name=deprecated{{$}}
 // AVAILABILITY2-NEXT:        End completions
 
-@#^KEYWORD2^#
-func method(){}
+@#^KEYWORD2^# func method(){}
 
 // KEYWORD2:                  Begin completions
 // KEYWORD2-NEXT:             Keyword/None:                       available[#Func Attribute#]; name=available{{$}}
@@ -58,10 +63,11 @@ func method(){}
 // KEYWORD2-NEXT:             Keyword/None:                       usableFromInline[#Func Attribute#]; name=usableFromInline
 // KEYWORD2-NEXT:             Keyword/None:                       discardableResult[#Func Attribute#]; name=discardableResult
 // KEYWORD2-NEXT:             Keyword/None:                       IBSegueAction[#Func Attribute#]; name=IBSegueAction{{$}}
-// KEYWORD2-NEXT:             End completions
+// KEYWORD2-NOT:              Keyword
+// KEYWORD2:                  Decl[Struct]/CurrModule:            MyStruct[#MyStruct#]; name=MyStruct
+// KEYWORD2:                  End completions
 
-@#^KEYWORD3^#
-class C {}
+@#^KEYWORD3^# class C {}
 
 // KEYWORD3:                  Begin completions
 // KEYWORD3-NEXT:             Keyword/None:                       available[#Class Attribute#]; name=available{{$}}
@@ -74,37 +80,36 @@ class C {}
 // KEYWORD3-NEXT:             Keyword/None:                       objcMembers[#Class Attribute#]; name=objcMembers{{$}}
 // KEYWORD3-NEXT:             Keyword/None:                       NSApplicationMain[#Class Attribute#]; name=NSApplicationMain{{$}}
 // KEYWORD3-NEXT:             Keyword/None:                       usableFromInline[#Class Attribute#]; name=usableFromInline
-// KEYWORD3-NEXT:             Keyword/None:                       _propertyWrapper[#Class Attribute#]; name=_propertyWrapper
+// KEYWORD3-NEXT:             Keyword/None:                       propertyWrapper[#Class Attribute#]; name=propertyWrapper
+// KEYWORD3-NEXT:             Keyword/None:                       _functionBuilder[#Class Attribute#]; name=_functionBuilder
 // KEYWORD3-NEXT:             End completions
 
-@#^KEYWORD3_2^#IB
-class C2 {}
+@#^KEYWORD3_2^#IB class C2 {}
 // Same as KEYWORD3.
 
-@#^KEYWORD4^#
-enum E {}
+@#^KEYWORD4^# enum E {}
 // KEYWORD4:                  Begin completions
 // KEYWORD4-NEXT:             Keyword/None:                       available[#Enum Attribute#]; name=available{{$}}
 // KEYWORD4-NEXT:             Keyword/None:                       objc[#Enum Attribute#]; name=objc{{$}}
 // KEYWORD4-NEXT:             Keyword/None:                       dynamicCallable[#Enum Attribute#]; name=dynamicCallable
 // KEYWORD4-NEXT:             Keyword/None:                       dynamicMemberLookup[#Enum Attribute#]; name=dynamicMemberLookup
 // KEYWORD4-NEXT:             Keyword/None:                       usableFromInline[#Enum Attribute#]; name=usableFromInline
-// KEYWORD4-NEXT:             Keyword/None:                       _propertyWrapper[#Enum Attribute#]; name=_propertyWrapper
+// KEYWORD4-NEXT:             Keyword/None:                       propertyWrapper[#Enum Attribute#]; name=propertyWrapper
+// KEYWORD4-NEXT:             Keyword/None:                       _functionBuilder[#Enum Attribute#]; name=_functionBuilder
 // KEYWORD4-NEXT:             End completions
 
 
-@#^KEYWORD5^#
-struct S{}
+@#^KEYWORD5^# struct S{}
 // KEYWORD5:                  Begin completions
 // KEYWORD5-NEXT:             Keyword/None:                       available[#Struct Attribute#]; name=available{{$}}
 // KEYWORD5-NEXT:             Keyword/None:                       dynamicCallable[#Struct Attribute#]; name=dynamicCallable
 // KEYWORD5-NEXT:             Keyword/None:                       dynamicMemberLookup[#Struct Attribute#]; name=dynamicMemberLookup
 // KEYWORD5-NEXT:             Keyword/None:                       usableFromInline[#Struct Attribute#]; name=usableFromInline
-// KEYWORD5-NEXT:             Keyword/None:                       _propertyWrapper[#Struct Attribute#]; name=_propertyWrapper
+// KEYWORD5-NEXT:             Keyword/None:                       propertyWrapper[#Struct Attribute#]; name=propertyWrapper
+// KEYWORD5-NEXT:             Keyword/None:                       _functionBuilder[#Struct Attribute#]; name=_functionBuilder
 // KEYWORD5-NEXT:             End completions
 
-@#^ON_GLOBALVAR^#
-var globalVar
+@#^ON_GLOBALVAR^# var globalVar
 // ON_GLOBALVAR: Begin completions
 // ON_GLOBALVAR-DAG: Keyword/None:                       available[#Var Attribute#]; name=available
 // ON_GLOBALVAR-DAG: Keyword/None:                       objc[#Var Attribute#]; name=objc
@@ -122,8 +127,7 @@ var globalVar
 // ON_GLOBALVAR: End completions
 
 struct _S {
-  @#^ON_INIT^#
-  init()
+  @#^ON_INIT^# init()
 // ON_INIT: Begin completions
 // ON_INIT-DAG: Keyword/None:                       available[#Constructor Attribute#]; name=available
 // ON_INIT-DAG: Keyword/None:                       objc[#Constructor Attribute#]; name=objc
@@ -134,8 +138,7 @@ struct _S {
 // ON_INIT-DAG: Keyword/None:                       discardableResult[#Constructor Attribute#]; name=discardableResult
 // ON_INIT: End completions
 
-  @#^ON_PROPERTY^#
-  var foo
+  @#^ON_PROPERTY^# var foo
 // ON_PROPERTY: Begin completions
 // ON_PROPERTY-DAG: Keyword/None:                       available[#Var Attribute#]; name=available
 // ON_PROPERTY-DAG: Keyword/None:                       objc[#Var Attribute#]; name=objc
@@ -153,7 +156,7 @@ struct _S {
 // ON_PROPERTY-NOT: Decl[PrecedenceGroup]
 // ON_PROPERTY: End completions
 
-  @#^ON_METHOD^#
+  @#^ON_METHOD^# private
   func foo()
 // ON_METHOD: Begin completions
 // ON_METHOD-DAG: Keyword/None:                       available[#Func Attribute#]; name=available
@@ -167,7 +170,33 @@ struct _S {
 // ON_METHOD-DAG: Keyword/None:                       usableFromInline[#Func Attribute#]; name=usableFromInline
 // ON_METHOD-DAG: Keyword/None:                       discardableResult[#Func Attribute#]; name=discardableResult
 // ON_METHOD-DAG: Keyword/None:                       IBSegueAction[#Func Attribute#]; name=IBSegueAction
+// ON_METHOD-NOT: Keyword
+// ON_METHOD: Decl[Struct]/CurrModule:            MyStruct[#MyStruct#]; name=MyStruct
 // ON_METHOD: End completions
+
+  func bar(@#^ON_PARAM_1^#)
+// ON_PARAM: Begin completions
+// ON_PARAM-NOT: Keyword
+// ON_PARAM: Decl[Struct]/CurrModule:            MyStruct[#MyStruct#]; name=MyStruct
+// ON_PARAM-NOT: Keyword
+// ON_PARAM: End completions
+
+  func bar(
+    @#^ON_PARAM_2^#
+
+    arg: Int
+  )
+// Same as ON_PARAM.
+
+  @#^ON_MEMBER_INDEPENDENT_1^#
+
+  func dummy1() {}
+// Same as ON_MEMBER_LAST.
+
+  @#^ON_MEMBER_INDEPENDENT_2^#
+  func dummy2() {}
+// Same as ON_MEMBER_LAST.
+
 
   @#^ON_MEMBER_LAST^#
 // ON_MEMBER_LAST: Begin completions
@@ -193,12 +222,22 @@ struct _S {
 // ON_MEMBER_LAST-DAG: Keyword/None:                       discardableResult[#Declaration Attribute#]; name=discardableResult
 // ON_MEMBER_LAST-DAG: Keyword/None:                       GKInspectable[#Declaration Attribute#]; name=GKInspectable
 // ON_MEMBER_LAST-DAG: Keyword/None:                       IBSegueAction[#Declaration Attribute#]; name=IBSegueAction
-// ON_MEMBER_LAST-DAG: Keyword/None:                       _propertyWrapper[#Declaration Attribute#]; name=_propertyWrapper
+// ON_MEMBER_LAST-DAG: Keyword/None:                       propertyWrapper[#Declaration Attribute#]; name=propertyWrapper
+// ON_MEMBER_LAST-DAG: Keyword/None:                       _functionBuilder[#Declaration Attribute#]; name=_functionBuilder
 // ON_MEMBER_LAST-NOT: Keyword
 // ON_MEMBER_LAST: Decl[Struct]/CurrModule:            MyStruct[#MyStruct#]; name=MyStruct
 // ON_MEMBER_LAST-NOT: Decl[PrecedenceGroup]
 // ON_MEMBER_LAST: End completions
 }
+
+@#^KEYWORD_INDEPENDENT_1^#
+
+func dummy1() {}
+// Same as KEYWORD_LAST.
+
+@#^KEYWORD_INDEPENDENT_2^#
+func dummy2() {}
+// Same as KEYWORD_LAST.
 
 @#^KEYWORD_LAST^#
 
@@ -224,7 +263,9 @@ struct _S {
 // KEYWORD_LAST-NEXT:             Keyword/None:                       usableFromInline[#Declaration Attribute#]; name=usableFromInline{{$}}
 // KEYWORD_LAST-NEXT:             Keyword/None:                       discardableResult[#Declaration Attribute#]; name=discardableResult
 // KEYWORD_LAST-NEXT:             Keyword/None:                       GKInspectable[#Declaration Attribute#]; name=GKInspectable{{$}}
-// KEYWORD_LAST-NEXT:             Keyword/None:                       _propertyWrapper[#Declaration Attribute#]; name=_propertyWrapper
+// KEYWORD_LAST-NEXT:             Keyword/None:                       propertyWrapper[#Declaration Attribute#]; name=propertyWrapper
+// KEYWORD_LAST-NEXT:             Keyword/None:                       _functionBuilder[#Declaration Attribute#]; name=_functionBuilder{{$}}
 // KEYWORD_LAST-NEXT:             Keyword/None:                       IBSegueAction[#Declaration Attribute#]; name=IBSegueAction{{$}}
+// KEYWORD_LAST-NOT:              Keyword
 // KEYWORD_LAST: Decl[Struct]/CurrModule:            MyStruct[#MyStruct#]; name=MyStruct
 // KEYWORD_LAST:                  End completions

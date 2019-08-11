@@ -1,3 +1,6 @@
+
+#if __has_include(<Foundation/Foundation.h>)
+
 #import "NSSlowString.h"
 
 
@@ -28,7 +31,7 @@
     return self.stringHolder.length;
 }
 
-- (id)copy {
+- (id)copyWithZone:(NSZone *)unused {
 	return self;
 }
 
@@ -41,3 +44,6 @@
 }
 
 @end
+
+#endif
+

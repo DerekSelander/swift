@@ -491,7 +491,7 @@ struct ImmutableAddressUseVerifier {
   }
 
   bool isMutatingOrConsuming(SILValue address) {
-    copy(address->getUses(), std::back_inserter(worklist));
+    llvm::copy(address->getUses(), std::back_inserter(worklist));
     while (!worklist.empty()) {
       auto *use = worklist.pop_back_val();
       auto *inst = use->getUser();
@@ -584,7 +584,7 @@ struct ImmutableAddressUseVerifier {
       case SILInstructionKind::IndexRawPointerInst:
         // Add these to our worklist.
         for (auto result : inst->getResults()) {
-          copy(result->getUses(), std::back_inserter(worklist));
+          llvm::copy(result->getUses(), std::back_inserter(worklist));
         }
         break;
       default:
@@ -1961,24 +1961,44 @@ public:
             "Store operand type and dest type mismatch");
   }
 
+  // Usually the assign_by_wrapper initializer or setter has a single argument
+  // (the value). But in case of a tuple, the initializer/setter expect the
+  // tuple elements as separate arguments.
+  void checkAssignByWrapperArgsRecursively(SILType ty,
+                               SILFunctionConventions &conv, unsigned &argIdx) {
+    if (auto tupleTy = ty.getAs<TupleType>()) {
+      for (Type et : tupleTy->getElementTypes()) {
+        SILType elTy = SILType::getPrimitiveType(CanType(et), ty.getCategory());
+        checkAssignByWrapperArgsRecursively(elTy, conv, argIdx);
+      }
+      return;
+    }
+    require(argIdx < conv.getNumSILArguments(),
+            "initializer or setter has too few arguments");
+    SILType argTy = conv.getSILArgumentType(argIdx++);
+    if (ty.isAddress() && argTy.isObject())
+      ty = ty.getObjectType();
+    require(ty == argTy,
+            "wrong argument type of initializer or setter");
+  }
+
+  void checkAssignByWrapperArgs(SILType ty, SILFunctionConventions &conv) {
+    unsigned argIdx = conv.getSILArgIndexOfFirstParam();
+    checkAssignByWrapperArgsRecursively(ty, conv, argIdx);
+    require(argIdx == conv.getNumSILArguments(),
+            "initializer or setter has too many arguments");
+  }
+
   void checkAssignByWrapperInst(AssignByWrapperInst *AI) {
     SILValue Src = AI->getSrc(), Dest = AI->getDest();
     require(AI->getModule().getStage() == SILStage::Raw,
             "assign instruction can only exist in raw SIL");
     require(Dest->getType().isAddress(), "Must store to an address dest");
 
-    unsigned indirectInitResults = Src->getType().isAddress() ? 1 : 0;
-
     SILValue initFn = AI->getInitializer();
     CanSILFunctionType initTy = initFn->getType().castTo<SILFunctionType>();
     SILFunctionConventions initConv(initTy, AI->getModule());
-    require(initConv.getNumIndirectSILResults() == indirectInitResults,
-            "init function has wrong number of indirect results");
-    unsigned firstArgIdx = initConv.getSILArgIndexOfFirstParam();
-    require(initConv.getNumSILArguments() == firstArgIdx + 1,
-            "init function has wrong number of arguments");
-    require(Src->getType() == initConv.getSILArgumentType(firstArgIdx),
-            "wrong argument type of init function");
+    checkAssignByWrapperArgs(Src->getType(), initConv);
     switch (initConv.getNumIndirectSILResults()) {
       case 0:
         require(initConv.getNumDirectSILResults() == 1,
@@ -2002,10 +2022,7 @@ public:
     SILFunctionConventions setterConv(setterTy, AI->getModule());
     require(setterConv.getNumIndirectSILResults() == 0,
             "set function has indirect results");
-    require(setterConv.getNumSILArguments() == 1,
-            "init function has wrong number of arguments");
-    require(Src->getType() == setterConv.getSILArgumentType(0),
-            "wrong argument type of init function");
+    checkAssignByWrapperArgs(Src->getType(), setterConv);
   }
 
 #define NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, name, ...) \
@@ -2843,7 +2860,7 @@ public:
 
     // If the method returns Self, substitute AnyObject for the result type.
     if (auto fnDecl = dyn_cast<FuncDecl>(method.getDecl())) {
-      if (fnDecl->hasDynamicSelf()) {
+      if (fnDecl->hasDynamicSelfResult()) {
         auto anyObjectTy = C.getAnyObjectType();
         for (auto &dynResult : dynResults) {
           auto newResultTy
@@ -2872,47 +2889,25 @@ public:
       : public SILVTableVisitor<VerifyClassMethodVisitor>
   {
   public:
-    SILDeclRef MethodToSee;
+    SILDeclRef Method;
     bool Seen = false;
-    
-    VerifyClassMethodVisitor(ClassDecl *theClass,
-                             SILDeclRef method)
-      : MethodToSee(method)
-    {
+
+    VerifyClassMethodVisitor(SILDeclRef method)
+      : Method(method.getOverriddenVTableEntry()) {
+      auto *theClass = cast<ClassDecl>(Method.getDecl()->getDeclContext());
       addVTableEntries(theClass);
     }
-    
-    bool methodMatches(SILDeclRef method) {
-      auto methodToCheck = MethodToSee;
-      do {
-        if (method == methodToCheck) {
-          return true;
-        }
-      } while ((methodToCheck = methodToCheck.getNextOverriddenVTableEntry()));
 
-      return false;
-    }
-    
     void addMethod(SILDeclRef method) {
       if (Seen)
         return;
-      if (methodMatches(method))
-        Seen = true;
-    }
-    
-    void addMethodOverride(SILDeclRef base, SILDeclRef derived) {
-      if (Seen)
-        return;
-      // The derived method should already have been checked.
-      // Test against the overridden base.
-      if (methodMatches(base))
+      if (method == Method)
         Seen = true;
     }
 
-    
-    void addPlaceholder(MissingMemberDecl *) {
-      /* no-op */
-    }
+    void addMethodOverride(SILDeclRef base, SILDeclRef derived) {}
+
+    void addPlaceholder(MissingMemberDecl *) {}
   };
 
   void checkClassMethodInst(ClassMethodInst *CMI) {
@@ -2939,10 +2934,7 @@ public:
             "extension method cannot be dispatched natively");
     
     // The method ought to appear in the class vtable.
-    require(VerifyClassMethodVisitor(
-                             operandType.getASTType()->getMetatypeInstanceType()
-                                       ->getClassOrBoundGenericClass(),
-                             member).Seen,
+    require(VerifyClassMethodVisitor(member).Seen,
             "method does not appear in the class's vtable");
   }
 
@@ -2976,10 +2968,7 @@ public:
             "super_method must look up a class method");
 
     // The method ought to appear in the class vtable.
-    require(VerifyClassMethodVisitor(
-                             operandType.getASTType()->getMetatypeInstanceType()
-                                       ->getClassOrBoundGenericClass(),
-                             member).Seen,
+    require(VerifyClassMethodVisitor(member).Seen,
             "method does not appear in the class's vtable");    
   }
 
@@ -4976,8 +4965,8 @@ public:
       if (F->hasForeignBody())
         return;
 
-      assert(F->isAvailableExternally() &&
-             "external declaration of internal SILFunction not allowed");
+      require(F->isAvailableExternally(),
+              "external declaration of internal SILFunction not allowed");
       // If F is an external declaration, there is nothing further to do,
       // return.
       return;

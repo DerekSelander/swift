@@ -158,6 +158,7 @@ func tuple_assign() {
   (a,b) = (1,2)
   func f() -> (Int,Int) { return (1,2) }
   ((a,b), (c,d)) = (f(), f())
+  _ = (a,b,c,d)
 }
 
 func missing_semicolons() {
@@ -165,6 +166,7 @@ func missing_semicolons() {
   func g() {}
   g() w += 1             // expected-error{{consecutive statements}} {{6-6=;}}
   var z = w"hello"    // expected-error{{consecutive statements}} {{12-12=;}} expected-warning {{string literal is unused}}
+  // expected-warning@-1 {{initialization of variable 'z' was never used; consider replacing with assignment to '_' or removing it}}
   class  C {}class  C2 {} // expected-error{{consecutive statements}} {{14-14=;}}
   struct S {}struct S2 {} // expected-error{{consecutive statements}} {{14-14=;}}
   func j() {}func k() {}  // expected-error{{consecutive statements}} {{14-14=;}}
@@ -350,9 +352,9 @@ func test_defer(_ a : Int) {
 
   // Not ok.
   while false { defer { break } }   // expected-error {{'break' cannot transfer control out of a defer statement}}
-  // expected-warning@-1 {{'defer' statement before end of scope always executes immediately}}{{17-22=do}}
+  // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{17-22=do}}
   defer { return }  // expected-error {{'return' cannot transfer control out of a defer statement}}
-  // expected-warning@-1 {{'defer' statement before end of scope always executes immediately}}{{3-8=do}}
+  // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{3-8=do}}
 }
 
 class SomeTestClass {
@@ -360,7 +362,7 @@ class SomeTestClass {
  
   func method() {
     defer { x = 97 }  // self. not required here!
-    // expected-warning@-1 {{'defer' statement before end of scope always executes immediately}}{{5-10=do}}
+    // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{5-10=do}}
   }
 }
 

@@ -510,7 +510,7 @@ def create_argument_parser():
            help='A space separated list of targets to cross-compile host '
                 'Swift tools for. Can be used multiple times.')
 
-    option('--stdlib-deployment-targets', append,
+    option('--stdlib-deployment-targets', store,
            type=argparse.ShellSplitType(),
            default=None,
            help='list of targets to compile or cross-compile the Swift '
@@ -521,6 +521,18 @@ def create_argument_parser():
            default=['all'],
            help='A space-separated list that filters which of the configured '
                 'targets to build the Swift standard library for, or "all".')
+
+    option('--swift-darwin-supported-archs', store,
+           metavar='ARCHS',
+           help='Semicolon-separated list of architectures to configure on '
+                'Darwin platforms. If left empty all default architectures '
+                'are configured.')
+
+    option('--swift-darwin-module-archs', store,
+           metavar='ARCHS',
+           help='Semicolon-separated list of architectures to configure Swift '
+                'module-only targets on Darwin platforms. These targets are '
+                'in addition to the full library targets.')
 
     # -------------------------------------------------------------------------
     in_group('Options to select projects')

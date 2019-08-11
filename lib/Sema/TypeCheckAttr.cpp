@@ -32,7 +32,6 @@
 #include "swift/Sema/IDETypeChecking.h"
 #include "clang/Basic/CharInfo.h"
 #include "llvm/Support/Debug.h"
-#include "clang/Basic/CharInfo.h"
 
 using namespace swift;
 
@@ -41,7 +40,7 @@ namespace {
   template<typename ...ArgTypes>
   void diagnoseAndRemoveAttr(TypeChecker &TC, Decl *D, DeclAttribute *attr,
                              ArgTypes &&...Args) {
-    assert(!D->hasClangNode() && "Clang imported propagated a bogus attribute");
+    assert(!D->hasClangNode() && "Clang importer propagated a bogus attribute");
     if (!D->hasClangNode()) {
       SourceLoc loc = attr->getLocation();
       assert(loc.isValid() && "Diagnosing attribute with invalid location");
@@ -132,6 +131,8 @@ public:
   IGNORED_ATTR(Custom)
   IGNORED_ATTR(PropertyWrapper)
   IGNORED_ATTR(DisfavoredOverload)
+  IGNORED_ATTR(FunctionBuilder)
+  IGNORED_ATTR(ProjectedValueProperty)
 #undef IGNORED_ATTR
 
   void visitAlignmentAttr(AlignmentAttr *attr) {
@@ -333,8 +334,11 @@ void AttributeEarlyChecker::visitDynamicAttr(DynamicAttr *attr) {
   // Members cannot be both dynamic and @_transparent.
   if (D->getAttrs().hasAttribute<TransparentAttr>())
     diagnoseAndRemoveAttr(attr, diag::dynamic_with_transparent);
+  if (!D->getAttrs().hasAttribute<ObjCAttr>() &&
+      D->getModuleContext()->isResilient())
+    diagnoseAndRemoveAttr(attr,
+                          diag::dynamic_and_library_evolution_not_supported);
 }
-
 
 void AttributeEarlyChecker::visitIBActionAttr(IBActionAttr *attr) {
   // Only instance methods can be IBActions.
@@ -497,36 +501,6 @@ void AttributeEarlyChecker::visitNSManagedAttr(NSManagedAttr *attr) {
   // Everything below deals with restrictions on @NSManaged properties.
   auto *VD = cast<VarDecl>(D);
 
-  if (VD->isLet())
-    diagnoseAndRemoveAttr(attr, diag::attr_NSManaged_let_property);
-
-  auto diagnoseNotStored = [&](unsigned kind) {
-    TC.diagnose(attr->getLocation(), diag::attr_NSManaged_not_stored, kind);
-    return attr->setInvalid();
-  };
-
-  // @NSManaged properties must be written as stored.
-  auto impl = VD->getImplInfo();
-  if (impl.isSimpleStored()) {
-    // @NSManaged properties end up being computed; complain if there is
-    // an initializer.
-    if (VD->getParentInitializer()) {
-      TC.diagnose(attr->getLocation(), diag::attr_NSManaged_initial_value)
-        .highlight(VD->getParentInitializer()->getSourceRange());
-      auto PBD = VD->getParentPatternBinding();
-      PBD->setInit(PBD->getPatternEntryIndexForVarDecl(VD), nullptr);
-    }
-    // Otherwise, ok.
-  } else if (impl.getReadImpl() == ReadImplKind::Address ||
-             impl.getWriteImpl() == WriteImplKind::MutableAddress) {
-    return diagnoseNotStored(/*addressed*/ 2);    
-  } else if (impl.getWriteImpl() == WriteImplKind::StoredWithObservers ||
-             impl.getWriteImpl() == WriteImplKind::InheritedWithObservers) {
-    return diagnoseNotStored(/*observing*/ 1);    
-  } else {
-    return diagnoseNotStored(/*computed*/ 0);
-  }
-
   // @NSManaged properties cannot be @NSCopying
   if (auto *NSCopy = VD->getAttrs().getAttribute<NSCopyingAttr>())
     diagnoseAndRemoveAttr(NSCopy, diag::attr_NSManaged_NSCopying);
@@ -558,21 +532,12 @@ void AttributeEarlyChecker::visitLazyAttr(LazyAttr *attr) {
   // lazy may only be used on properties.
   auto *VD = cast<VarDecl>(D);
 
-  // It cannot currently be used on let's since we don't have a mutability model
-  // that supports it.
-  if (VD->isLet())
-    diagnoseAndRemoveAttr(attr, diag::lazy_not_on_let);
-
   auto attrs = VD->getAttrs();
   // 'lazy' is not allowed to have reference attributes
   if (auto *refAttr = attrs.getAttribute<ReferenceOwnershipAttr>())
     diagnoseAndRemoveAttr(attr, diag::lazy_not_strong, refAttr->get());
 
-  // lazy is not allowed on a protocol requirement.
   auto varDC = VD->getDeclContext();
-  if (isa<ProtocolDecl>(varDC))
-    diagnoseAndRemoveAttr(attr, diag::lazy_not_in_protocol);
-
 
   // 'lazy' is not allowed on a global variable or on a static property (which
   // are already lazily initialized).
@@ -583,25 +548,6 @@ void AttributeEarlyChecker::visitLazyAttr(LazyAttr *attr) {
     diagnoseAndRemoveAttr(attr, diag::lazy_on_already_lazy_global);
   } else if (!VD->getDeclContext()->isTypeContext()) {
     diagnoseAndRemoveAttr(attr, diag::lazy_must_be_property);
-  }
-
-  // lazy must have an initializer, and the pattern binding must be a simple
-  // one.
-  if (!VD->getParentInitializer())
-    diagnoseAndRemoveAttr(attr, diag::lazy_requires_initializer);
-
-  if (!VD->getParentPatternBinding()->getSingleVar())
-    diagnoseAndRemoveAttr(attr, diag::lazy_requires_single_var);
-
-
-  // TODO: Lazy properties can't yet be observed.
-  auto impl = VD->getImplInfo();
-  if (impl.isSimpleStored()) {
-    // ok
-  } else if (VD->hasStorage()) {
-    diagnoseAndRemoveAttr(attr, diag::lazy_not_observable);
-  } else {
-    diagnoseAndRemoveAttr(attr, diag::lazy_not_on_computed);
   }
 }
 
@@ -662,7 +608,7 @@ void AttributeEarlyChecker::visitSetterAccessAttr(
       storageKind = SK_Subscript;
     else if (storage->getDeclContext()->isTypeContext())
       storageKind = SK_Property;
-    else if (cast<VarDecl>(storage)->isImmutable())
+    else if (cast<VarDecl>(storage)->isLet())
       storageKind = SK_Constant;
     else
       storageKind = SK_Variable;
@@ -769,7 +715,6 @@ public:
     IGNORED_ATTR(IBDesignable)
     IGNORED_ATTR(IBInspectable)
     IGNORED_ATTR(IBOutlet) // checked early.
-    IGNORED_ATTR(ImplementationOnly)
     IGNORED_ATTR(ImplicitlyUnwrappedOptional)
     IGNORED_ATTR(Indirect)
     IGNORED_ATTR(Inline)
@@ -801,6 +746,7 @@ public:
     IGNORED_ATTR(WarnUnqualifiedAccess)
     IGNORED_ATTR(WeakLinked)
     IGNORED_ATTR(DisfavoredOverload)
+    IGNORED_ATTR(ProjectedValueProperty)
 #undef IGNORED_ATTR
 
   void visitAvailableAttr(AvailableAttr *attr);
@@ -854,6 +800,9 @@ public:
   void visitNonOverrideAttr(NonOverrideAttr *attr);
   void visitCustomAttr(CustomAttr *attr);
   void visitPropertyWrapperAttr(PropertyWrapperAttr *attr);
+  void visitFunctionBuilderAttr(FunctionBuilderAttr *attr);
+
+  void visitImplementationOnlyAttr(ImplementationOnlyAttr *attr);
 };
 } // end anonymous namespace
 
@@ -898,8 +847,8 @@ bool swift::isValidDynamicCallableMethod(FuncDecl *decl, DeclContext *DC,
   if (!hasKeywordArguments) {
     auto arrayLitProto =
       TC.Context.getProtocol(KnownProtocolKind::ExpressibleByArrayLiteral);
-    return TC.conformsToProtocol(argType, arrayLitProto, DC,
-                                 ConformanceCheckOptions()).hasValue();
+    return TypeChecker::conformsToProtocol(argType, arrayLitProto, DC,
+                                           ConformanceCheckOptions()).hasValue();
   }
   // If keyword arguments, check that argument type conforms to
   // `ExpressibleByDictionaryLiteral` and that the `Key` associated type
@@ -908,15 +857,15 @@ bool swift::isValidDynamicCallableMethod(FuncDecl *decl, DeclContext *DC,
     TC.Context.getProtocol(KnownProtocolKind::ExpressibleByStringLiteral);
   auto dictLitProto =
     TC.Context.getProtocol(KnownProtocolKind::ExpressibleByDictionaryLiteral);
-  auto dictConf = TC.conformsToProtocol(argType, dictLitProto, DC,
-                                        ConformanceCheckOptions());
+  auto dictConf = TypeChecker::conformsToProtocol(argType, dictLitProto, DC,
+                                                  ConformanceCheckOptions());
   if (!dictConf) return false;
   auto lookup = dictLitProto->lookupDirect(TC.Context.Id_Key);
   auto keyAssocType =
     cast<AssociatedTypeDecl>(lookup[0])->getDeclaredInterfaceType();
   auto keyType = dictConf.getValue().getAssociatedType(argType, keyAssocType);
-  return TC.conformsToProtocol(keyType, stringLitProtocol, DC,
-                               ConformanceCheckOptions()).hasValue();
+  return TypeChecker::conformsToProtocol(keyType, stringLitProtocol, DC,
+                                         ConformanceCheckOptions()).hasValue();
 }
 
 /// Returns true if the given nominal type has a valid implementation of a
@@ -1005,8 +954,8 @@ bool swift::isValidStringDynamicMemberLookup(SubscriptDecl *decl,
     TC.Context.getProtocol(KnownProtocolKind::ExpressibleByStringLiteral);
 
   // If this is `subscript(dynamicMember: String*)`
-  return bool(TC.conformsToProtocol(paramType, stringLitProto, DC,
-                                    ConformanceCheckOptions()));
+  return bool(TypeChecker::conformsToProtocol(paramType, stringLitProto, DC,
+                                              ConformanceCheckOptions()));
 }
 
 bool swift::isValidKeyPathDynamicMemberLookup(SubscriptDecl *decl,
@@ -1021,25 +970,6 @@ bool swift::isValidKeyPathDynamicMemberLookup(SubscriptDecl *decl,
            NTD == TC.Context.getReferenceWritableKeyPathDecl();
   }
   return false;
-}
-
-Optional<Type>
-swift::getRootTypeOfKeypathDynamicMember(SubscriptDecl *subscript,
-                                         const DeclContext *DC) {
-  auto &TC = TypeChecker::createForContext(DC->getASTContext());
-
-  if (!isValidKeyPathDynamicMemberLookup(subscript, TC))
-    return None;
-
-  const auto *param = subscript->getIndices()->get(0);
-  auto keyPathType = param->getType()->getAs<BoundGenericType>();
-  if (!keyPathType)
-    return None;
-
-  assert(!keyPathType->getGenericArgs().empty() &&
-         "invalid keypath dynamic member");
-  auto rootType = keyPathType->getGenericArgs()[0];
-  return rootType;
 }
 
 /// The @dynamicMemberLookup attribute is only allowed on types that have at
@@ -1433,9 +1363,9 @@ void AttributeChecker::visitNSCopyingAttr(NSCopyingAttr *attr) {
   assert(VD->getOverriddenDecl() == nullptr &&
          "Can't have value with storage that is an override");
 
-  // Check the type.  It must be must be [unchecked]optional, weak, a normal
+  // Check the type.  It must be an [unchecked]optional, weak, a normal
   // class, AnyObject, or classbound protocol.
-  // must conform to the NSCopying protocol.
+  // It must conform to the NSCopying protocol.
   
 }
 
@@ -1491,8 +1421,9 @@ void AttributeChecker::checkApplicationMainAttribute(DeclAttribute *attr,
   }
 
   if (!ApplicationDelegateProto ||
-      !TC.conformsToProtocol(CD->getDeclaredType(), ApplicationDelegateProto,
-                             CD, None)) {
+      !TypeChecker::conformsToProtocol(CD->getDeclaredType(),
+                                       ApplicationDelegateProto,
+                                       CD, None)) {
     TC.diagnose(attr->getLocation(),
                 diag::attr_ApplicationMain_not_ApplicationDelegate,
                 applicationMainKind);
@@ -2156,6 +2087,9 @@ static FuncDecl *findReplacedAccessor(DeclName replacedVarName,
     Type replacementStorageType = getDynamicComparisonType(replacementStorage);
     results.erase(std::remove_if(results.begin(), results.end(),
         [&](ValueDecl *result) {
+          // Protocol requirements are not replaceable.
+          if (isa<ProtocolDecl>(result->getDeclContext()))
+            return true;
           // Check for static/instance mismatch.
           if (result->isStatic() != replacementStorage->isStatic())
             return true;
@@ -2206,23 +2140,24 @@ static FuncDecl *findReplacedAccessor(DeclName replacedVarName,
   }
 
   // Find the accessor in the replaced storage decl.
-  for (auto *origAccessor : origStorage->getAllAccessors()) {
-    TC.validateDecl(origAccessor);
-    if (origAccessor->getAccessorKind() != replacement->getAccessorKind())
-      continue;
+  auto *origAccessor = origStorage->getOpaqueAccessor(
+      replacement->getAccessorKind());
+  if (!origAccessor)
+    return nullptr;
 
-    if (origAccessor->isImplicit() &&
-        !(origStorage->getReadImpl() == ReadImplKind::Stored &&
-          origStorage->getWriteImpl() == WriteImplKind::Stored)) {
-      TC.diagnose(attr->getLocation(),
-                  diag::dynamic_replacement_accessor_not_explicit,
-                  (unsigned)origAccessor->getAccessorKind(), replacedVarName);
-      attr->setInvalid();
-      return nullptr;
-    }
-    return origAccessor;
+  TC.validateDecl(origAccessor);
+
+  if (origAccessor->isImplicit() &&
+      !(origStorage->getReadImpl() == ReadImplKind::Stored &&
+        origStorage->getWriteImpl() == WriteImplKind::Stored)) {
+    TC.diagnose(attr->getLocation(),
+                diag::dynamic_replacement_accessor_not_explicit,
+                (unsigned)origAccessor->getAccessorKind(), replacedVarName);
+    attr->setInvalid();
+    return nullptr;
   }
-  return nullptr;
+
+  return origAccessor;
 }
 
 static AbstractFunctionDecl *
@@ -2237,9 +2172,13 @@ findReplacedFunction(DeclName replacedFunctionName,
   lookupReplacedDecl(replacedFunctionName, attr, replacement, results);
 
   for (auto *result : results) {
+    // Protocol requirements are not replaceable.
+    if (isa<ProtocolDecl>(result->getDeclContext()))
+      continue;
     // Check for static/instance mismatch.
     if (result->isStatic() != replacement->isStatic())
       continue;
+
     if (TC)
       TC->validateDecl(result);
     TypeMatchOptions matchMode = TypeMatchFlags::AllowABICompatible;
@@ -2360,19 +2299,19 @@ void TypeChecker::checkDynamicReplacementAttribute(ValueDecl *D) {
 
   // Collect the accessor replacement mapping if this is an abstract storage.
   if (auto *var = dyn_cast<AbstractStorageDecl>(D)) {
-     for (auto *accessor : var->getAllAccessors()) {
+    var->visitParsedAccessors([&](AccessorDecl *accessor) {
+      if (attr->isInvalid())
+        return;
+
        validateDecl(accessor);
-       if (accessor->isImplicit())
-         continue;
        auto *orig = findReplacedAccessor(attr->getReplacedFunctionName(),
                                          accessor, attr, *this);
-       if (attr->isInvalid())
-         return;
        if (!orig)
-         continue;
+         return;
+
        origs.push_back(orig);
        replacements.push_back(accessor);
-     }
+     });
   } else {
     // Otherwise, find the matching function.
     auto *fun = cast<AbstractFunctionDecl>(D);
@@ -2547,17 +2486,58 @@ void AttributeChecker::visitCustomAttr(CustomAttr *attr) {
       attr->setInvalid();
       return;
     }
-
-    // If this attribute isn't the one that attached a property wrapper to
-    // this property, complain.
-    auto var = cast<VarDecl>(D);
-    if (auto attached = var->getAttachedPropertyWrapper()) {
-      if (attached != attr) {
-        TC.diagnose(attr->getLocation(), diag::property_wrapper_multiple);
-        TC.diagnose(attached->getLocation(),
-                    diag::previous_property_wrapper_here);
+    
+    return;
+  }
+  
+  // If the nominal type is a function builder type, verify that D is a
+  // function, storage with an explicit getter, or parameter of function type.
+  if (nominal->getAttrs().hasAttribute<FunctionBuilderAttr>()) {
+    ValueDecl *decl;
+    if (auto param = dyn_cast<ParamDecl>(D)) {
+      decl = param;
+    } else if (auto func = dyn_cast<FuncDecl>(D)) {
+      decl = func;
+    } else if (auto storage = dyn_cast<AbstractStorageDecl>(D)) {
+      decl = storage;
+      auto getter = storage->getParsedAccessor(AccessorKind::Get);
+      if (!getter || !getter->hasBody()) {
+        TC.diagnose(attr->getLocation(),
+                    diag::function_builder_attribute_on_storage_without_getter,
+                    nominal->getFullName(),
+                    isa<SubscriptDecl>(storage) ? 0
+                      : storage->getDeclContext()->isTypeContext() ? 1
+                      : cast<VarDecl>(storage)->isLet() ? 2 : 3);
+        attr->setInvalid();
         return;
       }
+    } else {
+      TC.diagnose(attr->getLocation(),
+                  diag::function_builder_attribute_not_allowed_here,
+                  nominal->getFullName());
+      attr->setInvalid();
+      return;
+    }
+
+    // Diagnose and ignore arguments.
+    if (attr->getArg()) {
+      TC.diagnose(attr->getLocation(), diag::function_builder_arguments)
+        .highlight(attr->getArg()->getSourceRange());
+    }
+
+    // Complain if this isn't the primary function-builder attribute.
+    auto attached = decl->getAttachedFunctionBuilder();
+    if (attached != attr) {
+      TC.diagnose(attr->getLocation(), diag::function_builder_multiple,
+                  isa<ParamDecl>(decl));
+      TC.diagnose(attached->getLocation(),
+                  diag::previous_function_builder_here);
+      attr->setInvalid();
+      return;
+    } else {
+      // Force any diagnostics associated with computing the function-builder
+      // type.
+      (void) decl->getFunctionBuilderType();
     }
 
     return;
@@ -2570,12 +2550,6 @@ void AttributeChecker::visitCustomAttr(CustomAttr *attr) {
 }
 
 
-void TypeChecker::checkParameterAttributes(ParameterList *params) {
-  for (auto param: *params) {
-    checkDeclAttributes(param);
-  }
-}
-
 void AttributeChecker::visitPropertyWrapperAttr(PropertyWrapperAttr *attr) {
   auto nominal = dyn_cast<NominalTypeDecl>(D);
   if (!nominal)
@@ -2583,6 +2557,80 @@ void AttributeChecker::visitPropertyWrapperAttr(PropertyWrapperAttr *attr) {
 
   // Force checking of the property wrapper type.
   (void)nominal->getPropertyWrapperTypeInfo();
+}
+
+void AttributeChecker::visitFunctionBuilderAttr(FunctionBuilderAttr *attr) {
+  // TODO: check that the type at least provides a `sequence` factory?
+  // Any other validation?
+}
+
+void
+AttributeChecker::visitImplementationOnlyAttr(ImplementationOnlyAttr *attr) {
+  if (isa<ImportDecl>(D)) {
+    // These are handled elsewhere.
+    return;
+  }
+
+  auto *VD = cast<ValueDecl>(D);
+  auto *overridden = VD->getOverriddenDecl();
+  if (!overridden) {
+    diagnoseAndRemoveAttr(attr, diag::implementation_only_decl_non_override);
+    return;
+  }
+
+  // Check if VD has the exact same type as what it overrides.
+  // Note: This is specifically not using `swift::getMemberTypeForComparison`
+  // because that erases more information than we want, like `throws`-ness.
+  auto baseInterfaceTy = overridden->getInterfaceType();
+  auto derivedInterfaceTy = VD->getInterfaceType();
+
+  auto selfInterfaceTy = VD->getDeclContext()->getDeclaredInterfaceType();
+
+  auto overrideInterfaceTy =
+      selfInterfaceTy->adjustSuperclassMemberDeclType(overridden, VD,
+                                                      baseInterfaceTy);
+
+  if (isa<AbstractFunctionDecl>(VD)) {
+    // Drop the 'Self' parameter.
+    // FIXME: The real effect here, though, is dropping the generic signature.
+    // This should be okay because it should already be checked as part of
+    // making an override, but that isn't actually the case as of this writing,
+    // and it's kind of suspect anyway.
+    derivedInterfaceTy =
+        derivedInterfaceTy->castTo<AnyFunctionType>()->getResult();
+    overrideInterfaceTy =
+        overrideInterfaceTy->castTo<AnyFunctionType>()->getResult();
+  } else if (isa<SubscriptDecl>(VD)) {
+    // For subscripts, we don't have a 'Self' type, but turn it
+    // into a monomorphic function type.
+    // FIXME: does this actually make sense, though?
+    auto derivedInterfaceFuncTy = derivedInterfaceTy->castTo<AnyFunctionType>();
+    derivedInterfaceTy =
+        FunctionType::get(derivedInterfaceFuncTy->getParams(),
+                          derivedInterfaceFuncTy->getResult());
+    auto overrideInterfaceFuncTy =
+        overrideInterfaceTy->castTo<AnyFunctionType>();
+    overrideInterfaceTy =
+        FunctionType::get(overrideInterfaceFuncTy->getParams(),
+                          overrideInterfaceFuncTy->getResult());
+  }
+
+  if (!derivedInterfaceTy->isEqual(overrideInterfaceTy)) {
+    TC.diagnose(VD, diag::implementation_only_override_changed_type,
+                overrideInterfaceTy);
+    TC.diagnose(overridden, diag::overridden_here);
+    return;
+  }
+
+  // FIXME: When compiling without library evolution enabled, this should also
+  // check whether VD or any of its accessors need a new vtable entry, even if
+  // it won't necessarily be able to say why.
+}
+
+void TypeChecker::checkParameterAttributes(ParameterList *params) {
+  for (auto param: *params) {
+    checkDeclAttributes(param);
+  }
 }
 
 void TypeChecker::checkDeclAttributes(Decl *D) {
@@ -2678,6 +2726,15 @@ void TypeChecker::checkReferenceOwnershipAttr(VarDecl *var,
     attr->setInvalid();
   }
 
+  ClassDecl *underlyingClass = underlyingType->getClassOrBoundGenericClass();
+  if (underlyingClass && underlyingClass->isIncompatibleWithWeakReferences()) {
+    diagnose(attr->getLocation(),
+             diag::invalid_ownership_incompatible_class,
+             underlyingType, ownershipKind)
+      .fixItRemove(attr->getRange());
+    attr->setInvalid();
+  }
+
   auto PDC = dyn_cast<ProtocolDecl>((var->getDeclContext()));
   if (PDC && !PDC->isObjC()) {
     // Ownership does not make sense in protocols, except for "weak" on
@@ -2767,19 +2824,23 @@ void TypeChecker::addImplicitDynamicAttribute(Decl *D) {
       return;
   }
 
-  // Don't add dynamic if accessor is inlinable or tranparent.
+  // Don't add dynamic if accessor is inlinable or transparent.
   if (auto *asd = dyn_cast<AbstractStorageDecl>(D)) {
-    for (auto *accessor : asd->getAllAccessors()) {
-      if (!accessor->isImplicit() && shouldBlockImplicitDynamic(accessor))
-        return;
-    }
+    bool blocked = false;
+    asd->visitParsedAccessors([&](AccessorDecl *accessor) {
+      blocked |= shouldBlockImplicitDynamic(accessor);
+    });
+    if (blocked)
+      return;
   }
 
   if (auto *VD = dyn_cast<VarDecl>(D)) {
     // Don't turn stored into computed properties. This could conflict with
     // exclusivity checking.
     // If there is a didSet or willSet function we allow dynamic replacement.
-    if (VD->hasStorage() && !VD->getDidSetFunc() && !VD->getWillSetFunc())
+    if (VD->hasStorage() &&
+        !VD->getParsedAccessor(AccessorKind::DidSet) &&
+        !VD->getParsedAccessor(AccessorKind::WillSet))
       return;
     // Don't add dynamic to local variables.
     if (VD->getDeclContext()->isLocalContext())
